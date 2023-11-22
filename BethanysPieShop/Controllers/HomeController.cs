@@ -7,10 +7,12 @@ namespace BethanysPieShop.Controllers
     public class HomeController : Controller
     {
         private readonly IPieRepository _pieRepository;
+        private readonly ISession? _session;
 
-        public HomeController(IPieRepository pieRepository)
+        public HomeController(IPieRepository pieRepository, IServiceProvider provider)
         {
             _pieRepository = pieRepository;
+            _session = provider.GetRequiredService<IHttpContextAccessor>().HttpContext?.Session;
         }
 
         public ViewResult Index()

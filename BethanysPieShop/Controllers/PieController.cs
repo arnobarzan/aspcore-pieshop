@@ -15,13 +15,22 @@ namespace BethanysPieShop.Controllers
             _categoryRepository = categoryRepository;
         }
 
-        public IActionResult List()
+        public IActionResult List(string category)
         {
             //ViewBag.CurrentCategory = "Cheese cakes";
 
             //return View(_pieRepository.AllPies);
+            PieListViewModel piesListViewModel;
+            if (category == null)
+            {
+                category = "All Pies";
+                piesListViewModel = new PieListViewModel(_pieRepository.AllPies, category);
+            } else
+            {
+                var pies = _pieRepository.AllPies.Where(p => p.Category.CategoryName == category);
+                piesListViewModel = new PieListViewModel(pies, category);
+            }
 
-            PieListViewModel piesListViewModel = new PieListViewModel(_pieRepository.AllPies, "Cheese cakes");
             return View(piesListViewModel);
         }
 
@@ -32,6 +41,15 @@ namespace BethanysPieShop.Controllers
                 return NotFound();
 
             return View(pie);
+        }
+
+        public IActionResult CategoryList(int categoryId, int numberToShow = 10) {
+
+            ViewBag.NumberToShow = numberToShow;
+
+            var filteredPies = _pieRepository.AllPies.Where(p => p.CategoryId == categoryId).Take(numberToShow).ToList();
+    
+            return View(filteredPies);
         }
     }
 }
