@@ -1,0 +1,338 @@
+builder.Services.AddSession();
+
+app.UseSession();
+
+
+builder.Services.AddScoped<IShoppingCart, ShoppingCart>(provider =>
+    ShoppingCart.GetCart(
+        provider.GetRequiredService<IHttpContextAccessor>().HttpContext?.Session, 
+        provider.GetRequiredService<BethanysDbContext>())
+    );
+
+////////////////////
+//IShoppingCart.cs//
+////////////////////
+
+public interface IShoppingCart
+{
+    void AddToCart(Pie pie);
+    int RemoveFromCart(Pie pie);
+    List<ShoppingCartItem> GetShoppingCartItems();
+    void ClearCart();
+    decimal GetShoppingCartTotal();
+}
+
+///////////////////
+//ShoppingCart.cs//
+///////////////////
+
+public class ShoppingCart : IShoppingCart
+{
+    private readonly BethanysDbContext _bethanysPieShopDbContext;
+
+    public string? ShoppingCartId { get; }
+
+    private ShoppingCart(BethanysDbContext bethanysPieShopDbContext, string cartId)
+    {
+        ShoppingCartId = cartId;
+        _bethanysPieShopDbContext = bethanysPieShopDbContext;
+    }
+
+    public static ShoppingCart GetCart(ISession? session, BethanysDbContext context)
+    {
+        //ISession? session = services.GetRequiredService<IHttpContextAccessor>()?.HttpContext?.Session;
+
+        //BethanysDbContext context = services.GetService<BethanysDbContext>() ?? throw new Exception("Error initializing");
+
+        string cartId = session?.GetString("CartId") ?? Guid.NewGuid().ToString();
+
+        session?.SetString("CartId", cartId);
+
+        return new ShoppingCart(context, cartId);
+    }
+
+    public void AddToCart(Pie pie)
+    {
+        var shoppingCartItem =
+            _bethanysPieShopDbContext.ShoppingCartItems.SingleOrDefault(
+                s => s.Pie.PieId == pie.PieId && s.ShoppingCartId == ShoppingCartId);
+
+        if (shoppingCartItem == null)
+        {
+            shoppingCartItem = new ShoppingCartItem
+            {
+                ShoppingCartId = ShoppingCartId,
+                Pie = pie,
+                Amount = 1
+            };
+
+            _bethanysPieShopDbContext.ShoppingCartItems.Add(shoppingCartItem);
+        }
+        else
+        {
+            shoppingCartItem.Amount++;
+        }
+        _bethanysPieShopDbContext.SaveChanges();
+    }
+
+    public int RemoveFromCart(Pie pie)
+    {
+        var shoppingCartItem =
+            _bethanysPieShopDbContext.ShoppingCartItems.SingleOrDefault(
+                s => s.Pie.PieId == pie.PieId && s.ShoppingCartId == ShoppingCartId);
+
+        var localAmount = 0;
+
+        if (shoppingCartItem != null)
+        {
+            if (shoppingCartItem.Amount > 1)
+            {
+                shoppingCartItem.Amount--;
+                localAmount = shoppingCartItem.Amount;
+            }
+            else
+            {
+                _bethanysPieShopDbContext.ShoppingCartItems.Remove(shoppingCartItem);
+            }
+        }
+
+        _bethanysPieShopDbContext.SaveChanges();
+
+        return localAmount;
+    }
+
+    public List<ShoppingCartItem> GetShoppingCartItems()
+    {
+        return _bethanysPieShopDbContext.ShoppingCartItems.Where(c => c.ShoppingCartId == ShoppingCartId)
+                .Include(s => s.Pie)
+                .ToList();
+    }
+
+    public void ClearCart()
+    {
+        var cartItems = _bethanysPieShopDbContext
+            .ShoppingCartItems
+            .Where(cart => cart.ShoppingCartId == ShoppingCartId);
+
+        _bethanysPieShopDbContext.ShoppingCartItems.RemoveRange(cartItems);
+
+        _bethanysPieShopDbContext.SaveChanges();
+    }
+
+    public decimal GetShoppingCartTotal()
+    {
+        var total = _bethanysPieShopDbContext.ShoppingCartItems.Where(c => c.ShoppingCartId == ShoppingCartId)
+            .Select(c => c.Pie.Price * c.Amount).Sum();
+        return total;
+    }
+}
+
+////////////////////////////
+//ShoppingCartViewModel.cs//
+////////////////////////////
+
+public class ShoppingCartViewModel
+{
+    public IEnumerable<ShoppingCartItem> ShoppingCartItems { get; }
+    public decimal ShoppingCartTotal { get; }
+
+    public ShoppingCartViewModel(IEnumerable<ShoppingCartItem> shoppingCartItems, decimal shoppingCartTotal)
+    {
+        ShoppingCartItems = shoppingCartItems;
+        ShoppingCartTotal = shoppingCartTotal;
+    }
+}
+
+/////////////////////////////
+//ShoppingCartController.cs//
+/////////////////////////////
+
+public IActionResult Index()
+{
+    var shoppingCartViewModel = new ShoppingCartViewModel(
+        _shoppingCart.GetShoppingCartItems(),
+        _shoppingCart.GetShoppingCartTotal());
+
+    return View(shoppingCartViewModel);
+}
+
+public IActionResult AddToShoppingCart(int pieId)
+{
+    Pie? selectedPie = _pieRepository.GetById(pieId);
+
+    if (selectedPie is not null)
+    {
+        _shoppingCart.AddToCart(selectedPie);
+    }
+    return RedirectToAction(nameof(Index));
+}
+
+public RedirectToActionResult RemoveFromShoppingCart(int pieId)
+{
+    Pie? selectedPie = _pieRepository.GetById(pieId);
+
+    if (selectedPie != null)
+    {
+        _shoppingCart.RemoveFromCart(selectedPie);
+    }
+    return RedirectToAction(nameof(Index));
+}
+
+
+/////////////////////////////
+//ShoppingCart/Index.cshtml//
+/////////////////////////////
+
+@model ShoppingCartViewModel
+
+<h3 class="my-5">
+    Shopping cart
+</h3>
+
+
+<div class="row gx-3">
+    <div class="col-8">
+        @foreach (ShoppingCartItem item in Model.ShoppingCartItems)
+        {
+            <div class="card shopping-cart-card mb-2">
+                <div class="row">
+                    <div class="col-md-4">
+                        <img src="@item.Pie.ImageThumbnailUrl" class="img-fluid rounded-start p-2" alt="@item.Pie.Name">
+                    </div>
+                    <div class="col-md-8">
+                        <div class="card-body">
+                            <h5 class="card-text">@item.Amount x @item.Pie.Name</h5>
+                            <div class="d-flex justify-content-between">
+                                <h6>@item.Pie.ShortDescription</h6>
+                                <h2>@item.Pie.Price.ToString("c")</h2>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+    </div>
+    <div class="col-4">
+        <div class="card shopping-cart-card p-3">
+            <div class="row">
+                <h4 class="col">Total:</h4>
+                <h4 class="col text-end">@Model.ShoppingCartTotal.ToString("c")</h4>
+            </div>
+            <hr />
+            <div class="text-center d-grid">
+                <a class="btn btn-secondary" asp-controller="Order" asp-action="Checkout"><h4>Check out now!</h4></a>
+            </div>
+        </div>
+    </div>
+</div>
+
+/////////////////////////
+//Shared/PieCard.cshtml//
+/////////////////////////
+
+@model Pie
+<div class="col">
+    <div class="card pie-card">
+        <img src="@Model.ImageThumbnailUrl" class="card-img-top" alt="@Model.Name">
+        <div class="card-body pie-button">
+            <h4 class="d-grid">
+                <a class="btn btn-secondary"
+                   asp-controller="ShoppingCart"
+                   asp-action="AddToShoppingCart"
+                   asp-route-pieId="@Model.PieId"> + Add to cart</a>
+            </h4>
+
+            <div class="d-flex justify-content-between mt-2">
+                <h2 class="text-start">
+                    <a asp-controller="Pie"
+                       asp-action="Details"
+                       asp-route-id="@Model.PieId"
+                       class="pie-link">@Model.Name</a>
+                </h2>
+                <h5 class="text-nowrap">
+                    @Model.Price.ToString("c")
+                </h5>
+            </div>
+        </div>
+    </div>
+</div>
+
+/////////////////////
+//Pie/Detail.cshtml//
+/////////////////////
+
+@model Pie
+
+<h3 class="my-5">
+    @Model.Name
+</h3>
+
+<div class="row gx-5">
+    <img alt="@Model.Name" src="@Model.ImageUrl" class="img-fluid col-5" />
+    <div class="col-7">
+        <h4>@Model.ShortDescription</h4>
+        <p>@Model.LongDescription</p>
+        <h3 class="pull-right">@Model.Price.ToString("c")</h3>
+        <div class="addToCart">
+            <p class="button">
+                <a class="btn btn-secondary" asp-controller="ShoppingCart" asp-action="AddToShoppingCart"
+                   asp-route-pieId="@Model.PieId">Add to cart</a>
+            </p>
+        </div>
+    </div>
+</div>
+
+////////////////////////////////////////////////////////
+//Shared/Components/ShoppingCartSummary/Default.cshtml//
+////////////////////////////////////////////////////////
+
+@model ShoppingCartViewModel
+
+@if (Model.ShoppingCartItems.Any())
+{
+    <ul class="navbar-nav mb-2 mb-lg-0">
+        <li class="nav-item">
+            <a class="nav-link">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" fill="currentColor" class="bi bi-cart3" viewBox="0 0 16 16">
+                    <path d="M0 1.5A.5.5 0 0 1 .5 1H2a.5.5 0 0 1 .485.379L2.89 3H14.5a.5.5 0 0 1 .49.598l-1 5a.5.5 0 0 1-.465.401l-9.397.472L4.415 11H13a.5.5 0 0 1 0 1H4a.5.5 0 0 1-.491-.408L2.01 3.607 1.61 2H.5a.5.5 0 0 1-.5-.5zM3.102 4l.84 4.479 9.144-.459L13.89 4H3.102zM5 12a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm7 0a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm-7 1a1 1 0 1 1 0 2 1 1 0 0 1 0-2zm7 0a1 1 0 1 1 0 2 1 1 0 0 1 0-2z" />
+                </svg>
+                <span id="cart-status">
+                    @Model.ShoppingCartItems.Count()
+                </span>
+            </a>
+        </li>
+    </ul>
+}
+
+////////////////////////////////////////////////////////
+//Shared/Components/CategoryMenu/Default.cshtml//
+////////////////////////////////////////////////////////
+
+@model IEnumerable<Category>
+
+<li class="nav-item dropdown">
+    <a class="nav-link dropdown-toggle"
+       data-toggle="dropdown"
+       href="#"
+       role="button"
+       data-bs-toggle="dropdown"
+       id="nav-dropdown"
+       aria-expanded="false">
+        Shop
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-dropdown">
+        @foreach (var category in Model)
+        {
+            <li>
+                <a asp-controller="Pie" asp-action="List"
+               asp-route-category="@category.CategoryName"
+                   class="dropdown-item">
+                    @category.CategoryName
+                </a>
+            </li>
+        }
+        <li>
+            <a asp-controller="Pie" asp-action="List" asp-route-Category="" class="dropdown-item">All pies</a>
+        </li>
+    </ul>
+</li>
